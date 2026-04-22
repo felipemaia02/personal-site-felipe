@@ -18,12 +18,14 @@ import SendIcon from '@mui/icons-material/Send';
 
 export default function ContactModal({ open, onClose }) {
   const formRef = useRef(null);
-  const [status, setStatus] = useState('idle'); // idle | sending | success | error
+  const [status, setStatus] = useState('idle');
   const [fields, setFields] = useState({ from_name: '', from_email: '', subject: '', message: '' });
   const [errors, setErrors] = useState({});
 
-  // Strips tags and control chars; keeps only safe printable characters
-  const sanitize = (value) => value.replace(/[<>"'`]/g, '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  const URL_RE = /https?:\/\/[^\s]*/gi;
+  const BARE_URL_RE = /\b(www\.|([-a-z0-9]+\.)+[a-z]{2,}(\/[^\s]*)?)(?=[\s,;!?]|$)/gi;
+  const stripUrls = (value) => value.replace(URL_RE, '').replace(BARE_URL_RE, '');
+  const sanitize = (value) => stripUrls(value).replace(/[<>"'`]/g, '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 
   const LIMITS = { from_name: 80, from_email: 254, subject: 120, message: 2000 };
 
@@ -50,16 +52,22 @@ export default function ContactModal({ open, onClose }) {
       e.from_email = 'Enter a valid email address';
     }
 
+    const hasUrl = (v) => /https?:\/\/|www\.|([-a-z0-9]+\.)+[a-z]{2,}/i.test(v);
+
     if (!subject) {
       e.subject = 'Subject is required';
     } else if (subject.length > LIMITS.subject) {
       e.subject = `Max ${LIMITS.subject} characters`;
+    } else if (hasUrl(subject)) {
+      e.subject = 'Links are not allowed';
     }
 
     if (!message) {
       e.message = 'Message is required';
     } else if (message.length > LIMITS.message) {
       e.message = `Max ${LIMITS.message} characters`;
+    } else if (hasUrl(message)) {
+      e.message = 'Links are not allowed';
     }
 
     return e;
