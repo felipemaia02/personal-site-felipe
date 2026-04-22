@@ -20,6 +20,7 @@ import SendIcon from '@mui/icons-material/Send';
 export default function ContactModal({ open, onClose }) {
   const formRef = useRef(null);
   const recaptchaRef = useRef(null);
+  const submittingRef = useRef(false);
   const [status, setStatus] = useState('idle');
   const [fields, setFields] = useState({ from_name: '', from_email: '', subject: '', message: '' });
   const [errors, setErrors] = useState({});
@@ -120,6 +121,9 @@ export default function ContactModal({ open, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (submittingRef.current) return;
+
     const validation = validate();
     if (Object.keys(validation).length) { setErrors(validation); return; }
 
@@ -134,6 +138,7 @@ export default function ContactModal({ open, onClose }) {
       return;
     }
 
+    submittingRef.current = true;
     setStatus('sending');
     try {
       await emailjs.sendForm(
@@ -149,6 +154,8 @@ export default function ContactModal({ open, onClose }) {
       setFields({ from_name: '', from_email: '', subject: '', message: '' });
     } catch {
       setStatus('error');
+    } finally {
+      submittingRef.current = false;
     }
   };
 
