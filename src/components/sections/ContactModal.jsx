@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import emailjs from '@emailjs/browser';
+import ReCAPTCHA from 'react-google-recaptcha';
 import {
   Alert,
   Box,
@@ -18,9 +19,11 @@ import SendIcon from '@mui/icons-material/Send';
 
 export default function ContactModal({ open, onClose }) {
   const formRef = useRef(null);
+  const recaptchaRef = useRef(null);
   const [status, setStatus] = useState('idle');
   const [fields, setFields] = useState({ from_name: '', from_email: '', subject: '', message: '' });
   const [errors, setErrors] = useState({});
+  const [captchaToken, setCaptchaToken] = useState(null);
 
   const URL_RE = /https?:\/\/[^\s]*/gi;
   const BARE_URL_RE = /\b(www\.|([-a-z0-9]+\.)+[a-z]{2,}(\/[^\s]*)?)(?=[\s,;!?]|$)/gi;
@@ -83,10 +86,53 @@ export default function ContactModal({ open, onClose }) {
     setErrors((prev) => ({ ...prev, [name]: undefined }));
   };
 
+  // Rate limiting: max 3 sends per hour, stored in localStorage
+  const RATE_KEY = 'contact_sends';
+  const RATE_LIMIT = 3;
+  const RATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+  const getRateData = () => {
+    try {
+      return JSON.parse(localStorage.getItem(RATE_KEY)) || { count: 0, windowStart: Date.now() };
+    } catch {
+      return { count: 0, windowStart: Date.now() };
+    }
+  };
+
+  const checkRateLimit = () => {
+    const data = getRateData();
+    const now = Date.now();
+    if (now - data.windowStart > RATE_WINDOW_MS) {
+      // Window expired — reset
+      localStorage.setItem(RATE_KEY, JSON.stringify({ count: 0, windowStart: now }));
+      return { allowed: true, remaining: RATE_LIMIT };
+    }
+    const remaining = RATE_LIMIT - data.count;
+    return { allowed: remaining > 0, remaining };
+  };
+
+  const incrementRateCount = () => {
+    const data = getRateData();
+    const now = Date.now();
+    const windowStart = now - data.windowStart > RATE_WINDOW_MS ? now : data.windowStart;
+    localStorage.setItem(RATE_KEY, JSON.stringify({ count: data.count + 1, windowStart }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const validation = validate();
     if (Object.keys(validation).length) { setErrors(validation); return; }
+
+    const { allowed } = checkRateLimit();
+    if (!allowed) {
+      setStatus('ratelimit');
+      return;
+    }
+
+    if (!captchaToken) {
+      setErrors((prev) => ({ ...prev, captcha: 'Please complete the CAPTCHA' }));
+      return;
+    }
 
     setStatus('sending');
     try {
@@ -96,6 +142,9 @@ export default function ContactModal({ open, onClose }) {
         formRef.current,
         { publicKey: import.meta.env.VITE_EMAILJS_PUBLIC_KEY },
       );
+      incrementRateCount();
+      setCaptchaToken(null);
+      recaptchaRef.current?.reset();
       setStatus('success');
       setFields({ from_name: '', from_email: '', subject: '', message: '' });
     } catch {
@@ -107,6 +156,8 @@ export default function ContactModal({ open, onClose }) {
     if (status === 'sending') return;
     setStatus('idle');
     setErrors({});
+    setCaptchaToken(null);
+    recaptchaRef.current?.reset();
     onClose();
   };
 
@@ -152,6 +203,14 @@ export default function ContactModal({ open, onClose }) {
             <Typography variant="h5" sx={{ mb: 1 }}>Message sent! 🎉</Typography>
             <Typography sx={{ color: 'text.secondary', mb: 3 }}>
               Thanks for reaching out. I'll get back to you soon.
+            </Typography>
+            <Button variant="outlined" color="primary" onClick={handleClose}>Close</Button>
+          </Box>
+        ) : status === 'ratelimit' ? (
+          <Box sx={{ textAlign: 'center', py: 4 }}>
+            <Typography variant="h5" sx={{ mb: 1 }}>Too many messages</Typography>
+            <Typography sx={{ color: 'text.secondary', mb: 3 }}>
+              You've reached the limit of {RATE_LIMIT} messages per hour. Please try again later.
             </Typography>
             <Button variant="outlined" color="primary" onClick={handleClose}>Close</Button>
           </Box>
@@ -219,13 +278,28 @@ export default function ContactModal({ open, onClose }) {
                 Something went wrong. Please try again or send an email directly.
               </Alert>
             )}
+            <ReCAPTCHA
+              ref={recaptchaRef}
+              sitekey={import.meta.env.VITE_RECAPTCHA_SITE_KEY}
+              onChange={(token) => {
+                setCaptchaToken(token);
+                setErrors((prev) => ({ ...prev, captcha: undefined }));
+              }}
+              onExpired={() => setCaptchaToken(null)}
+              theme="dark"
+            />
+            {errors.captcha && (
+              <Alert severity="warning" sx={{ borderRadius: '8px', py: 0 }}>
+                {errors.captcha}
+              </Alert>
+            )}
             <Button
               type="submit"
               variant="contained"
               color="primary"
               size="large"
               endIcon={status === 'sending' ? <CircularProgress size={18} color="inherit" /> : <SendIcon />}
-              disabled={status === 'sending'}
+              disabled={status === 'sending' || !captchaToken}
               sx={{ alignSelf: 'flex-end', minWidth: 160 }}
             >
               {status === 'sending' ? 'Sending…' : 'Send'}
